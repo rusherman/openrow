@@ -24,11 +24,9 @@ obj.config = {
   minListItemWidth = 24,
   minListItemHeight = 12,
   maxTargetAreaRatio = 0.85,
-  listClickXRatio = 0.18,
-  listClickYRatio = 0.42,
-  listClickMaxXInset = 64,
   genericClickXRatio = 0.5,
   genericClickYRatio = 0.5,
+  linkClickInset = 5,
   overlayTextSize = 14,
   overlayPaddingX = 5,
   overlayPaddingY = 2,
@@ -36,7 +34,7 @@ obj.config = {
   dimOpacity = 0.08,
   clickDelay = 0.03,
   debug = false,
-  scanRoles = {
+  controlRoles = {
     AXButton = true,
     AXCheckBox = true,
     AXColorWell = true,
@@ -44,17 +42,11 @@ obj.config = {
     AXDisclosureTriangle = true,
     AXImage = true,
     AXLink = true,
-    AXCell = true,
-    AXColumn = false,
-    AXGroup = false,
-    AXOutlineRow = true,
-    AXRow = true,
     AXMenuButton = true,
     AXMenuItem = true,
     AXPopUpButton = true,
     AXRadioButton = true,
     AXSlider = true,
-    AXStaticText = false,
     AXTextArea = true,
     AXTextField = true,
   },
@@ -65,6 +57,12 @@ obj.config = {
     AXRow = true,
     AXStaticText = true,
   },
+  ignoredActions = {
+    AXShowMenu = true,
+    AXScrollToVisible = true,
+    AXShowDefaultUI = true,
+    AXShowAlternateUI = true,
+  },
   childAttributes = {
     "AXChildren",
     "AXVisibleChildren",
@@ -73,13 +71,6 @@ obj.config = {
     "AXColumns",
     "AXCells",
     "AXContents",
-  },
-  preferMouseRoles = {
-    AXCell = true,
-    AXGroup = true,
-    AXOutlineRow = true,
-    AXRow = true,
-    AXStaticText = true,
   },
 }
 
@@ -111,11 +102,6 @@ local function safeAttribute(element, attribute)
   return nil
 end
 
-local function safeAction(element, action)
-  local ok, result = pcall(function() return element:performAction(action) end)
-  return ok and result ~= false
-end
-
 local function safeSetAttribute(element, attribute, value)
   local ok, result = pcall(function() return element:setAttributeValue(attribute, value) end)
   return ok and result ~= false
@@ -129,11 +115,11 @@ local function frameCenter(frame)
 end
 
 local function targetClickPoint(target, config)
-  if config.preferMouseRoles[target.role] then
-    local xInset = math.min(config.listClickMaxXInset, math.max(8, target.frame.w * config.listClickXRatio))
+  if target.role == "AXLink" then
+    local inset = config.linkClickInset
     return {
-      x = target.frame.x + xInset,
-      y = target.frame.y + target.frame.h * config.listClickYRatio,
+      x = target.frame.x + inset,
+      y = target.frame.y + target.frame.h - inset,
     }
   end
 
@@ -181,14 +167,23 @@ local function safeActionNames(element)
   return {}
 end
 
-local function hasAction(actionNames, expected)
+local function hasActionableAction(actionNames, ignoredActions)
   for _, action in ipairs(actionNames) do
-    if action == expected then return true end
+    if not ignoredActions[action] then return true end
   end
   return false
 end
 
-local function targetKind(role, frame, enabled, actionNames, config, screens)
+local function hasMeaningfulText(element)
+  local text = table.concat({
+    tostring(safeAttribute(element, "AXTitle") or ""),
+    tostring(safeAttribute(element, "AXValue") or ""),
+    tostring(safeAttribute(element, "AXDescription") or ""),
+  }, "")
+  return text:match("%S") ~= nil
+end
+
+local function targetKind(element, role, frame, enabled, actionNames, config, screens, hasHintableChildren)
   if not role or enabled == false or not frameVisible(frame, screens) then return nil end
   if frame.w < config.minSize or frame.h < config.minSize then return nil end
 
@@ -197,12 +192,15 @@ local function targetKind(role, frame, enabled, actionNames, config, screens)
   local areaRatio = (frame.w * frame.h) / screenArea
   if areaRatio > config.maxTargetAreaRatio then return nil end
 
-  if config.scanRoles[role] then return "role" end
-  if hasAction(actionNames, "AXPress") or hasAction(actionNames, "AXShowMenu") then return "action" end
+  if config.roleFallbacks[role] and hasHintableChildren then return nil end
+
+  if config.controlRoles[role] then return "role" end
+  if hasActionableAction(actionNames, config.ignoredActions) then return "action" end
 
   if config.roleFallbacks[role]
       and frame.w >= config.minListItemWidth
       and frame.h >= config.minListItemHeight then
+    if role == "AXStaticText" and not hasMeaningfulText(element) then return nil end
     return "fallback"
   end
 
@@ -216,23 +214,22 @@ local function rectContains(outer, inner)
     and outer.y + outer.h >= inner.y + inner.h
 end
 
+local function framesAlmostEqual(left, right)
+  local sameCenter = math.abs(frameCenter(left).x - frameCenter(right).x) < 3
+    and math.abs(frameCenter(left).y - frameCenter(right).y) < 3
+  local sameSize = math.abs(left.w - right.w) < 3 and math.abs(left.h - right.h) < 3
+  return sameCenter and sameSize
+end
+
 local function dedupeTargets(targets)
   local result = {}
 
   for _, target in ipairs(targets) do
     local shouldAdd = true
 
-    for index = #result, 1, -1 do
-      local existing = result[index]
-      local sameCenter = math.abs(frameCenter(existing.frame).x - frameCenter(target.frame).x) < 3
-        and math.abs(frameCenter(existing.frame).y - frameCenter(target.frame).y) < 3
-      local sameSize = math.abs(existing.frame.w - target.frame.w) < 3
-        and math.abs(existing.frame.h - target.frame.h) < 3
-
-      if sameCenter and sameSize then
-        if existing.kind == "fallback" and target.kind ~= "fallback" then
-          table.remove(result, index)
-        else
+    for _, existing in ipairs(result) do
+      if framesAlmostEqual(existing.frame, target.frame) then
+        if not (existing.kind == "fallback" and target.kind ~= "fallback") then
           shouldAdd = false
         end
         break
@@ -244,7 +241,20 @@ local function dedupeTargets(targets)
       end
     end
 
-    if shouldAdd then table.insert(result, target) end
+    if shouldAdd then
+      for index = #result, 1, -1 do
+        local existing = result[index]
+        local sameFrame = framesAlmostEqual(existing.frame, target.frame)
+        local existingContainsTarget = rectContains(existing.frame, target.frame)
+
+        if existing.kind == "fallback" and target.kind ~= "fallback"
+            and (sameFrame or existingContainsTarget) then
+          table.remove(result, index)
+        end
+      end
+
+      table.insert(result, target)
+    end
   end
 
   return result
@@ -320,7 +330,24 @@ function obj:_scanElement(element, targets, seen, depth, screens)
   local frame = safeAttribute(element, "AXFrame")
   local enabled = safeAttribute(element, "AXEnabled")
   local actionNames = safeActionNames(element)
-  local kind = targetKind(role, frame, enabled, actionNames, self.config, screens)
+  local children = collectChildren(element, self.config.childAttributes)
+
+  for _, child in ipairs(children) do
+    self:_scanElement(child, targets, seen, depth + 1, screens)
+    if #targets >= self.config.maxElements then return end
+  end
+
+  local hasHintableChildren = false
+  if frame then
+    for _, target in ipairs(targets) do
+      if target.depth > depth and rectContains(frame, target.frame) then
+        hasHintableChildren = true
+        break
+      end
+    end
+  end
+
+  local kind = targetKind(element, role, frame, enabled, actionNames, self.config, screens, hasHintableChildren)
 
   if kind then
     table.insert(targets, {
@@ -328,14 +355,9 @@ function obj:_scanElement(element, targets, seen, depth, screens)
       role = role,
       kind = kind,
       frame = frame,
+      depth = depth,
       searchText = buildSearchText(element, role),
     })
-  end
-
-  local children = collectChildren(element, self.config.childAttributes)
-  for _, child in ipairs(children) do
-    self:_scanElement(child, targets, seen, depth + 1, screens)
-    if #targets >= self.config.maxElements then return end
   end
 end
 
@@ -346,14 +368,10 @@ function obj:_scanTargets()
   local appElement = hs.axuielement.applicationElement(app)
   if not appElement then return {} end
 
-  local windows = safeAttribute(appElement, "AXWindows") or {}
   local rootElements = {}
   local focusedWindow = safeAttribute(appElement, "AXFocusedWindow")
 
   if focusedWindow then table.insert(rootElements, focusedWindow) end
-  for _, window in ipairs(windows) do
-    if tostring(window) ~= tostring(focusedWindow) then table.insert(rootElements, window) end
-  end
   if #rootElements == 0 then table.insert(rootElements, appElement) end
 
   local targets = {}
@@ -466,26 +484,17 @@ function obj:_clickTarget(target)
 
   self:_clearOverlay()
 
-  local preferMouse = self.config.preferMouseRoles[target.role] == true
-
-  if not preferMouse and (target.kind == "role" or target.kind == "action") then
-    if safeAction(target.element, "AXPress") then
-      if self.config.debug then self.logger.i("click via AXPress") end
-      return true
-    end
-  end
-
   safeSetAttribute(target.element, "AXFocused", true)
   safeSetAttribute(target.element, "AXSelected", true)
 
   local clickPoint = targetClickPoint(target, self.config)
   if self.config.debug then
-    self.logger.i(string.format("mouse fallback point={x=%.1f,y=%.1f}", clickPoint.x, clickPoint.y))
+    self.logger.i(string.format("mouse click point={x=%.1f,y=%.1f}", clickPoint.x, clickPoint.y))
   end
   hs.mouse.absolutePosition(clickPoint)
   hs.timer.usleep(math.floor(self.config.clickDelay * 1000000))
   hs.eventtap.leftClick(clickPoint)
-  if self.config.debug then self.logger.i("click via mouse fallback") end
+  if self.config.debug then self.logger.i("click via mouse") end
   return true
 end
 

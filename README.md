@@ -45,22 +45,22 @@ hs.loadSpoon("OpenRow"):bindHotkeys({
 
 ## Current Limitations
 
-- Scans the frontmost app/window tree, including common visible/navigation child collections.
+- Scans the frontmost app's focused window tree, including common visible/navigation child collections.
 - Some apps expose poor or incomplete Accessibility metadata.
 - Browser/Electron pages with huge Accessibility trees may scan slowly.
 - Overlay layout is intentionally simple.
-- Clicking falls back to mouse click when `AXPress` is unavailable.
+- Clicking uses simulated mouse clicks instead of `AXPress`.
 - No scroll mode yet.
 
 ## Target Detection Notes
 
 OpenRow marks an element as targetable when it matches one of these signals:
 
-- Known interactive roles such as buttons, links, text fields, menu items, rows, outline rows, and cells.
-- Accessibility actions such as `AXPress` or `AXShowMenu`, even when the role itself is generic.
-- Fallback visible list-like roles such as `AXRow`, `AXCell`, `AXGroup`, and `AXStaticText` when they have a usable frame.
+- Known control roles such as buttons, links, text fields, menu items, sliders, and pop-up buttons.
+- Accessibility actions after ignoring decorative actions such as `AXShowMenu` and `AXScrollToVisible`.
+- Fallback list-like containers such as `AXRow`, `AXOutlineRow`, `AXCell`, `AXGroup`, and meaningful `AXStaticText` only when they do not already contain a targetable child.
 
-If an app still misses list items, the next thing to inspect is which roles and child attributes that app exposes through Accessibility.
+If an app still misses list items, inspect which actions, roles, and child attributes that app exposes through Accessibility.
 
 ## Debugging Clicks
 
@@ -72,20 +72,18 @@ openrow.config.debug = true
 openrow:bindHotkeys()
 ```
 
-Then open the Hammerspoon Console and retry the failing target. The log prints the selected label, role, target kind, frame, and whether OpenRow used `AXPress` or mouse fallback.
+Then open the Hammerspoon Console and retry the failing target. The log prints the selected label, role, target kind, frame, and mouse click point.
 
-Some generic Accessibility roles, especially `AXGroup`, `AXRow`, `AXOutlineRow`, `AXCell`, and `AXStaticText`, can report a successful `AXPress` without actually activating the visual item. OpenRow prefers mouse fallback for those roles.
+Some Accessibility roles can report a successful `AXPress` without actually activating the visual item. OpenRow avoids that false-positive path and clicks the selected target with the mouse.
 
-For large list/group targets, OpenRow clicks near the left text area rather than the rectangle center. Tune the fallback point if a specific app exposes oversized or shifted frames:
+OpenRow clicks the center of each target frame, except links, which use a small lower-left inset. Tune the link inset if a specific app exposes shifted link frames:
 
 ```lua
 local openrow = hs.loadSpoon("OpenRow")
-openrow.config.listClickXRatio = 0.18
-openrow.config.listClickYRatio = 0.42
-openrow.config.listClickMaxXInset = 64
+openrow.config.linkClickInset = 5
 openrow:bindHotkeys()
 ```
 
 ## Next Validation Steps
 
-Test in Finder, Safari/Chrome, VS Code, Terminal, System Settings, and Electron apps. Record which apps expose useful `AXFrame`, `AXTitle`, `AXRole`, and `AXPress` behavior before moving the design into a native Swift app.
+Test in Finder, Safari/Chrome, VS Code, Terminal, System Settings, and Electron apps. Record which apps expose useful `AXFrame`, `AXTitle`, `AXRole`, actions, and mouse-click behavior before moving the design into a native Swift app.
