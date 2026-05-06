@@ -1,0 +1,50 @@
+package.path = package.path .. ";./OpenRow.spoon/?.lua"
+local alphabet = require("lib.alphabet")
+
+describe("alphabet.lengthFor", function()
+  it("returns 1 when count fits in single char", function()
+    assert_equals(alphabet.lengthFor(4, "asdf"), 1)
+    assert_equals(alphabet.lengthFor(1, "asdf"), 1)
+  end)
+
+  it("returns 2 when count exceeds base", function()
+    assert_equals(alphabet.lengthFor(5, "abcd"), 2)
+    assert_equals(alphabet.lengthFor(5, "abc"), 2)
+  end)
+
+  it("scales length to fit count", function()
+    assert_equals(alphabet.lengthFor(8, "ab"), 3)
+    assert_equals(alphabet.lengthFor(9, "ab"), 4)
+  end)
+end)
+
+describe("alphabet.labelAt", function()
+  it("returns single char for index <= base at length 1", function()
+    assert_equals(alphabet.labelAt(1, 1, "abc"), "a")
+    assert_equals(alphabet.labelAt(2, 1, "abc"), "b")
+    assert_equals(alphabet.labelAt(3, 1, "abc"), "c")
+  end)
+
+  it("pads with leading first char when length > minimum needed", function()
+    assert_equals(alphabet.labelAt(1, 2, "abc"), "aa")
+    assert_equals(alphabet.labelAt(2, 2, "abc"), "ab")
+    assert_equals(alphabet.labelAt(3, 2, "abc"), "ac")
+  end)
+
+  it("carries to next digit", function()
+    assert_equals(alphabet.labelAt(4, 2, "abc"), "ba")
+    assert_equals(alphabet.labelAt(9, 2, "abc"), "cc")
+  end)
+end)
+
+describe("alphabet.generate", function()
+  it("generates equal-length labels", function()
+    local labels = alphabet.generate(5, "abcd")
+    assert_deep_equals(labels, { "aa", "ab", "ac", "ad", "ba" })
+  end)
+
+  it("returns empty list for zero count", function()
+    local labels = alphabet.generate(0, "abc")
+    assert_equals(#labels, 0)
+  end)
+end)

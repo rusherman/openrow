@@ -13,8 +13,7 @@ This is a validation prototype, not a polished app. The goal is to test whether 
 ## Install
 
 ```bash
-mkdir -p ~/.hammerspoon/Spoons
-cp -R OpenRow.spoon ~/.hammerspoon/Spoons/
+bash scripts/install.sh
 ```
 
 Add this to `~/.hammerspoon/init.lua`:
@@ -68,7 +67,8 @@ Enable click-path logging from your Hammerspoon config:
 
 ```lua
 local openrow = hs.loadSpoon("OpenRow")
-openrow.config.debug = true
+openrow.config.debug.action = true
+openrow:init()
 openrow:bindHotkeys()
 ```
 
@@ -83,6 +83,31 @@ local openrow = hs.loadSpoon("OpenRow")
 openrow.config.linkClickInset = 5
 openrow:bindHotkeys()
 ```
+
+## Development
+
+Requirements:
+
+- macOS with [Hammerspoon](https://www.hammerspoon.org/)
+- Lua 5.1+ on `$PATH` (e.g. `brew install lua`)
+
+Workflow:
+
+```bash
+# Run unit tests
+lua tests/run.lua
+
+# Sync the spoon into ~/.hammerspoon and reload Hammerspoon
+bash scripts/install.sh
+
+# Manual smoke (release gate)
+open tests/manual/smoke-checklist.md
+```
+
+Module layout under `OpenRow.spoon/`:
+
+- `core/` — atomic capabilities: element data model, factory (the only impure file), geometry, overlay, input parsing
+- `lib/` — utilities: alphabet (hint label generation), log (channelled debug)
 
 ## Next Validation Steps
 
