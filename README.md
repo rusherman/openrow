@@ -29,7 +29,7 @@ Reload Hammerspoon config.
 - Press `Cmd+Shift+Space` to activate OpenRow.
 - Type the yellow label shown over a target to click it.
 - When many targets are visible, labels are equal length to avoid prefix conflicts such as `a` versus `aa`.
-- Press `/` to enter search mode, then type text to filter targets by title, description, value, help text, or role.
+- Press `/` to enter search mode, then type text to filter targets by title, description, value, help text, or role. Search supports spaces and shifted symbols.
 - Press `Return` to click the first visible target.
 - Press `Delete` to remove the last label/search character.
 - Press `Esc` to exit.
@@ -48,8 +48,9 @@ hs.loadSpoon("OpenRow"):bindHotkeys({
 - Some apps expose poor or incomplete Accessibility metadata.
 - Browser/Electron pages with huge Accessibility trees may scan slowly.
 - Overlay layout is intentionally simple.
-- Clicking uses simulated mouse clicks instead of `AXPress`.
 - No scroll mode yet.
+
+Clicking uses a real mouse click at the resolved target point. Some Accessibility roles report a successful `AXPress` without actually activating the visual item, so OpenRow does not rely on `AXPress`.
 
 ## Target Detection Notes
 
@@ -106,8 +107,13 @@ open tests/manual/smoke-checklist.md
 
 Module layout under `OpenRow.spoon/`:
 
-- `core/` — atomic capabilities: element data model, factory (the only impure file), geometry, overlay, input parsing
-- `lib/` — utilities: alphabet (hint label generation), log (channelled debug)
+- `core/` — atomic capabilities:
+  - `scanner.lua` — pure target classification, dedup, ranking, search-text helpers
+  - `element_factory.lua` — `hs.axuielement` safe-call wrappers (the only impure file)
+  - `geometry.lua` — frame math
+  - `overlay.lua` — `hs.canvas` wrapper
+  - `input.lua` — keyboard event parsing (pure `character` mapping is unit tested)
+- `lib/` — utilities: `alphabet.lua` (hint label generation), `log.lua` (channelled debug)
 
 ## Next Validation Steps
 

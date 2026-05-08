@@ -1,6 +1,6 @@
--- OpenRow.spoon/core/element_factory.lua — hs.axuielement adapter.
-
-local Element = require("core.element")
+-- OpenRow.spoon/core/element_factory.lua — hs.axuielement safe-call helpers.
+-- All exports wrap raw axuielement calls in pcall so that scanner / runtime
+-- code can stay simple. No snapshot type — callers read attributes on demand.
 
 local M = {}
 
@@ -12,7 +12,8 @@ end
 
 function M.safeSetAttribute(element, attribute, value)
   local ok, result = pcall(function() return element:setAttributeValue(attribute, value) end)
-  return ok and result ~= false
+  -- hs.axuielement returns the element on success, nil on failure.
+  return ok and result ~= nil and result ~= false
 end
 
 function M.safeActionNames(element)
@@ -44,16 +45,6 @@ function M.rawChildren(element, childAttributes)
   end
 
   return children
-end
-
-function M.from(element)
-  return Element.new({
-    rawId = tostring(element),
-    role = M.safeAttribute(element, "AXRole"),
-    frame = M.safeAttribute(element, "AXFrame"),
-    actions = M.safeActionNames(element),
-    enabled = M.safeAttribute(element, "AXEnabled"),
-  })
 end
 
 return M

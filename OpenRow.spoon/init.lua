@@ -10,7 +10,6 @@ obj.__index = obj
 obj.name = "OpenRow"
 obj.version = "0.1.0"
 obj.author = "OpenRow contributors"
-obj.homepage = "https://github.com/openrow/openrow"
 obj.license = "MIT"
 
 local spoonPath = hs.spoons.scriptPath()
@@ -19,8 +18,8 @@ package.path = package.path .. ";" .. spoonPath .. "?.lua;" .. spoonPath .. "?/i
 local log = require("lib.log")
 local alphabet = require("lib.alphabet")
 local geometry = require("core.geometry")
-local Element = require("core.element")
 local elementFactory = require("core.element_factory")
+local scanner = require("core.scanner")
 local Overlay = require("core.overlay")
 local input = require("core.input")
 
@@ -100,6 +99,7 @@ obj._query = ""
 obj._labelInput = ""
 obj._allTargets = {}
 obj._targets = {}
+obj._labelMap = {}
 obj._overlay = nil
 obj._eventtap = nil
 obj._hotkey = nil
@@ -118,37 +118,14 @@ local function normalizeText(value)
   return tostring(value):lower()
 end
 
-local function hasActionableAction(actionNames, ignoredActions)
-  for _, action in ipairs(actionNames) do
-    if not ignoredActions[action] then return true end
-  end
-  return false
-end
-
-local function hasMeaningfulText(element)
-  local text = table.concat({
-    tostring(elementFactory.safeAttribute(element, "AXTitle") or ""),
-    tostring(elementFactory.safeAttribute(element, "AXValue") or ""),
-    tostring(elementFactory.safeAttribute(element, "AXDescription") or ""),
-  }, "")
-  return text:match("%S") ~= nil
-end
-
-local function computeSearchText(element, role)
-  local title = tostring(elementFactory.safeAttribute(element, "AXTitle") or "")
-  local desc  = tostring(elementFactory.safeAttribute(element, "AXDescription") or "")
-  local value = tostring(elementFactory.safeAttribute(element, "AXValue") or "")
-  local help  = tostring(elementFactory.safeAttribute(element, "AXHelp") or "")
-  return ((role or "") .. " " .. title .. " " .. desc .. " " .. value .. " " .. help):lower()
-end
-
-local function isChromiumApp(app, patterns)
-  if not app or not patterns then return false end
-  local bid = app:bundleID() or ""
-  for _, pattern in ipairs(patterns) do
-    if bid:match(pattern) then return true end
-  end
-  return false
+local function searchTextFor(element, role)
+  return scanner.computeSearchText({
+    role = role,
+    title = elementFactory.safeAttribute(element, "AXTitle"),
+    description = elementFactory.safeAttribute(element, "AXDescription"),
+    value = elementFactory.safeAttribute(element, "AXValue"),
+    help = elementFactory.safeAttribute(element, "AXHelp"),
+  })
 end
 
 -- AXManualAccessibility wakes Electron's lazy AX tree without side effects.
@@ -161,86 +138,9 @@ local function wakeApp(app, config)
   if config.wakeNonNative then
     elementFactory.safeSetAttribute(appElement, "AXManualAccessibility", true)
   end
-  if config.wakeChromium or isChromiumApp(app, config.chromiumBundlePatterns) then
+  if config.wakeChromium or scanner.isChromiumApp(app:bundleID(), config.chromiumBundlePatterns) then
     elementFactory.safeSetAttribute(appElement, "AXEnhancedUserInterface", true)
   end
-end
-
-local function maxScreenArea(screenFrames)
-  local maxArea = 0
-  for _, screenFrame in ipairs(screenFrames) do
-    maxArea = math.max(maxArea, screenFrame.w * screenFrame.h)
-  end
-  return math.max(1, maxArea)
-end
-
-local function targetKind(element, role, frame, enabled, actionNames, config, screenFrames, screenArea, hasHintableChildren)
-  if not role or enabled == false or not geometry.visibleOnScreens(frame, screenFrames) then return nil end
-  if frame.w < config.minSize or frame.h < config.minSize then return nil end
-
-  local areaRatio = (frame.w * frame.h) / screenArea
-  if areaRatio > config.maxTargetAreaRatio then return nil end
-
-  if config.roleFallbacks[role] and hasHintableChildren then return nil end
-
-  if config.controlRoles[role] then return "role" end
-  if hasActionableAction(actionNames, config.ignoredActions) then return "action" end
-
-  if config.roleFallbacks[role]
-      and frame.w >= config.minListItemWidth
-      and frame.h >= config.minListItemHeight then
-    if role == "AXStaticText" and not hasMeaningfulText(element) then return nil end
-    return "fallback"
-  end
-
-  return nil
-end
-
-local function dedupeTargets(targets)
-  local result = {}
-
-  for _, target in ipairs(targets) do
-    local shouldAdd = true
-
-    for _, existing in ipairs(result) do
-      if geometry.framesAlmostEqual(existing.frame, target.frame) then
-        if not (existing.kind == "fallback" and target.kind ~= "fallback") then
-          shouldAdd = false
-        end
-        break
-      end
-
-      if target.kind == "fallback" and geometry.contains(existing.frame, target.frame) then
-        shouldAdd = false
-        break
-      end
-    end
-
-    if shouldAdd then
-      for index = #result, 1, -1 do
-        local existing = result[index]
-        local sameFrame = geometry.framesAlmostEqual(existing.frame, target.frame)
-        local existingContainsTarget = geometry.contains(existing.frame, target.frame)
-
-        if existing.kind == "fallback" and target.kind ~= "fallback"
-            and (sameFrame or existingContainsTarget) then
-          table.remove(result, index)
-        end
-      end
-
-      table.insert(result, target)
-    end
-  end
-
-  return result
-end
-
-local function rankTargets(targets)
-  table.sort(targets, function(left, right)
-    if math.abs(left.frame.y - right.frame.y) > 8 then return left.frame.y < right.frame.y end
-    return left.frame.x < right.frame.x
-  end)
-  return targets
 end
 
 function obj:_scanElement(element, targets, seen, depth, screenFrames, screenArea)
@@ -251,33 +151,44 @@ function obj:_scanElement(element, targets, seen, depth, screenFrames, screenAre
   if seen[identity] then return end
   seen[identity] = true
 
-  local snapshot = elementFactory.from(element)
-  local role = Element.role(snapshot)
-  local frame = Element.frame(snapshot)
-  local enabled = Element.enabled(snapshot)
-  local actionNames = Element.actions(snapshot)
+  local role = elementFactory.safeAttribute(element, "AXRole")
+  local frame = elementFactory.safeAttribute(element, "AXFrame")
+  local enabled = elementFactory.safeAttribute(element, "AXEnabled")
+  local actionNames = elementFactory.safeActionNames(element)
 
   -- Prune subtrees with zero-area frame (collapsed menus, hidden controls).
   if frame and (frame.w <= 0 or frame.h <= 0) then return end
 
   local children = elementFactory.rawChildren(element, self.config.childAttributes)
+  local childStart = #targets
 
   for _, child in ipairs(children) do
     self:_scanElement(child, targets, seen, depth + 1, screenFrames, screenArea)
     if #targets >= self.config.maxElements then return end
   end
 
-  local hasHintableChildren = false
-  if frame then
-    for _, target in ipairs(targets) do
-      if target.depth > depth and geometry.contains(frame, target.frame) then
-        hasHintableChildren = true
-        break
-      end
-    end
+  local hasHintableChildren = #targets > childStart
+
+  local hasMeaningful = false
+  if role == "AXStaticText" then
+    hasMeaningful = scanner.hasMeaningfulText({
+      title = elementFactory.safeAttribute(element, "AXTitle"),
+      value = elementFactory.safeAttribute(element, "AXValue"),
+      description = elementFactory.safeAttribute(element, "AXDescription"),
+    })
   end
 
-  local kind = targetKind(element, role, frame, enabled, actionNames, self.config, screenFrames, screenArea, hasHintableChildren)
+  local kind = scanner.targetKind({
+    role = role,
+    frame = frame,
+    enabled = enabled,
+    actionNames = actionNames,
+    hasMeaningfulText = hasMeaningful,
+    hasHintableChildren = hasHintableChildren,
+    config = self.config,
+    screenFrames = screenFrames,
+    screenArea = screenArea,
+  })
 
   if kind then
     table.insert(targets, {
@@ -312,7 +223,7 @@ function obj:_scanTargets()
 
   local screens = hs.screen.allScreens()
   local screenFrames = hs.fnutils.imap(screens, function(screen) return screen:fullFrame() end)
-  local screenArea = maxScreenArea(screenFrames)
+  local screenArea = scanner.maxScreenArea(screenFrames)
 
   local function collectOnce()
     local targets = {}
@@ -330,7 +241,7 @@ function obj:_scanTargets()
   local pidWasHealthy = pid and self._scannedPids[pid]
       and self._scannedPids[pid] >= self.config.chromiumScanThreshold
 
-  if isChromiumApp(app, self.config.chromiumBundlePatterns)
+  if scanner.isChromiumApp(app:bundleID(), self.config.chromiumBundlePatterns)
       and #targets < self.config.chromiumScanThreshold
       and not pidWasHealthy then
     log.scan("chromium retry: initial=%d threshold=%d delay=%.0fms",
@@ -347,13 +258,15 @@ function obj:_scanTargets()
     self._scannedPids[pid] = math.max(#targets, self._scannedPids[pid] or 0)
   end
 
-  return rankTargets(dedupeTargets(targets))
+  return scanner.rankTargets(scanner.dedupeTargets(targets))
 end
 
 function obj:_assignLabels(targets)
   self._labelLength = alphabet.lengthFor(#targets, self.config.keys)
+  self._labelMap = {}
   for index, target in ipairs(targets) do
     target.label = alphabet.labelAt(index, self._labelLength, self.config.keys)
+    self._labelMap[target.label] = target
   end
   return targets
 end
@@ -368,7 +281,7 @@ function obj:_filterTargets(query)
   local filtered = {}
   for _, target in ipairs(self._allTargets) do
     if not target.searchText then
-      target.searchText = computeSearchText(target.element, target.role)
+      target.searchText = searchTextFor(target.element, target.role)
     end
     if target.searchText:find(normalized, 1, true) then table.insert(filtered, target) end
   end
@@ -405,9 +318,6 @@ function obj:_clickTarget(target)
 
   self:_clearOverlay()
 
-  elementFactory.safeSetAttribute(target.element, "AXFocused", true)
-  elementFactory.safeSetAttribute(target.element, "AXSelected", true)
-
   local clickPoint = geometry.clickPoint(target, self.config)
   log.action("mouse click point={x=%.1f,y=%.1f}", clickPoint.x, clickPoint.y)
   hs.mouse.absolutePosition(clickPoint)
@@ -417,17 +327,11 @@ function obj:_clickTarget(target)
   return true
 end
 
-function obj:_targetForLabel(label)
-  for _, target in ipairs(self._targets) do
-    if target.label == label then return target end
-  end
-  return nil
-end
-
 function obj:_handleInput(event)
   local parsed = input.parse(event)
   if parsed.kind ~= "keyDown" then return true end
   local key = parsed.key
+
   if key == "escape" then
     self:deactivate()
     return true
@@ -451,6 +355,8 @@ function obj:_handleInput(event)
     return true
   end
 
+  -- "/" enters search mode in label mode. In search mode "/" falls through and
+  -- becomes a regular search character (input.character maps it to "/").
   if key == "/" and self._mode ~= "search" then
     self._mode = "search"
     self._query = ""
@@ -458,40 +364,40 @@ function obj:_handleInput(event)
     return true
   end
 
-  if key and #key == 1 then
-    if self._mode == "search" then
-      self._query = self._query .. key
-      self:_filterTargets(self._query)
-      self:_drawOverlay()
-    else
-      self._labelInput = self._labelInput .. key
+  local character = parsed.character
+  if not character then return true end
 
-      if #self._labelInput >= self._labelLength then
-        local exact = self:_targetForLabel(self._labelInput)
-        if exact then
-          self:_clickTarget(exact)
-        end
-        self:deactivate()
-        return true
-      end
-
-      local hasPrefix = false
-      for _, target in ipairs(self._targets) do
-        if target.label:sub(1, #self._labelInput) == self._labelInput then
-          hasPrefix = true
-          break
-        end
-      end
-
-      if not hasPrefix then
-        hs.alert.show("OpenRow: no label " .. self._labelInput)
-        self:deactivate()
-        return true
-      end
-    end
+  if self._mode == "search" then
+    self._query = self._query .. character
+    self:_filterTargets(self._query)
+    self:_drawOverlay()
     return true
   end
 
+  -- Label mode only accepts characters from the configured alphabet.
+  if not self.config.keys:find(character, 1, true) then return true end
+
+  self._labelInput = self._labelInput .. character
+
+  if #self._labelInput >= self._labelLength then
+    local exact = self._labelMap[self._labelInput]
+    if exact then self:_clickTarget(exact) end
+    self:deactivate()
+    return true
+  end
+
+  local hasPrefix = false
+  for label, _ in pairs(self._labelMap) do
+    if label:sub(1, #self._labelInput) == self._labelInput then
+      hasPrefix = true
+      break
+    end
+  end
+
+  if not hasPrefix then
+    hs.alert.show("OpenRow: no label " .. self._labelInput)
+    self:deactivate()
+  end
   return true
 end
 
@@ -530,6 +436,7 @@ function obj:deactivate()
   self._labelInput = ""
   self._allTargets = {}
   self._targets = {}
+  self._labelMap = {}
 
   if self._eventtap then
     self._eventtap:stop()
@@ -542,9 +449,17 @@ end
 
 function obj:_startAppWatcher()
   if self._appWatcher then return end
-  if not (self.config.wakeNonNative or self.config.wakeChromium) then return end
   self._appWatcher = hs.application.watcher.new(function(_, eventType, app)
-    if eventType ~= hs.application.watcher.activated or not app then return end
+    if not app then return end
+
+    if eventType == hs.application.watcher.terminated then
+      local pid = app:pid()
+      if pid then self._scannedPids[pid] = nil end
+      return
+    end
+
+    if eventType ~= hs.application.watcher.activated then return end
+    if not (self.config.wakeNonNative or self.config.wakeChromium) then return end
     wakeApp(app, self.config)
     log.scan("wake app=%s bundle=%s", app:name() or "?", app:bundleID() or "?")
   end)
