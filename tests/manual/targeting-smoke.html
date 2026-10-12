@@ -1,0 +1,8 @@
+
+<html><body style="font:18px sans-serif;padding:20px">
+<title>OpenRow Targeting QA</title><h2>OpenRow Targeting QA</h2><p id="result">No clicks yet</p>
+<button id="button" onclick="document.body.dataset.clicks=Number(document.body.dataset.clicks||0)+1;document.getElementById("result").textContent="Button clicks: "+document.body.dataset.clicks">QA Button</button>
+<input aria-label="QA Input" placeholder="QA Input">
+<p style="width:180px"><a href="#" onclick="event.preventDefault();document.body.dataset.links=Number(document.body.dataset.links||0)+1;document.getElementById("result").textContent="Link clicks: "+document.body.dataset.links">QA wrapped link over multiple lines</a></p>
+<div style="height:65px;overflow:auto;border:1px solid black"><div style="height:250px"><button style="display:block">QA Visible</button><button style="display:block;margin-top:180px">QA Offscreen</button></div></div>
+</body></html>

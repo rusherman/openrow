@@ -82,6 +82,7 @@ obj.config = {
     AXStaticText = true,
   },
   ignoredActions = {
+    AXRaise = true,
     AXShowMenu = true,
     AXScrollToVisible = true,
     AXShowDefaultUI = true,
@@ -143,27 +144,28 @@ local function wakeApp(app, config)
   end
 end
 
-function obj:_scanElement(element, targets, seen, depth, screenFrames, screenArea)
+function obj:_scanElement(element, targets, seen, depth, screenFrames, screenArea, clipBounds)
   if #targets >= self.config.maxElements or depth > self.config.maxDepth then return end
   if not element then return end
 
-  local identity = tostring(element)
-  if seen[identity] then return end
-  seen[identity] = true
-
   local role = elementFactory.safeAttribute(element, "AXRole")
-  local frame = elementFactory.safeAttribute(element, "AXFrame")
+  if not elementFactory.markSeen(seen, element, role) then return end
+  local frame = elementFactory.frame(element)
   local enabled = elementFactory.safeAttribute(element, "AXEnabled")
   local actionNames = elementFactory.safeActionNames(element)
 
-  -- Prune subtrees with zero-area frame (collapsed menus, hidden controls).
-  if frame and (frame.w <= 0 or frame.h <= 0) then return end
-
-  local children = elementFactory.rawChildren(element, self.config.childAttributes)
+  -- Structural containers can have empty frames while their children are visible.
+  local childClip = clipBounds
+  if elementFactory.clippingRoles[role] and frame and frame.w > 0 and frame.h > 0 then
+    childClip = frame
+    if clipBounds then childClip = geometry.intersection(frame, clipBounds) end
+    if not geometry.visibleOnScreens(childClip, screenFrames) then return end
+  end
+  local children = elementFactory.rawChildren(element, self.config.childAttributes, self.config.maxElements)
   local childStart = #targets
 
   for _, child in ipairs(children) do
-    self:_scanElement(child, targets, seen, depth + 1, screenFrames, screenArea)
+    self:_scanElement(child, targets, seen, depth + 1, screenFrames, screenArea, childClip)
     if #targets >= self.config.maxElements then return end
   end
 
@@ -178,6 +180,7 @@ function obj:_scanElement(element, targets, seen, depth, screenFrames, screenAre
     })
   end
 
+  frame = geometry.visibleFrame(frame, screenFrames, clipBounds)
   local kind = scanner.targetKind({
     role = role,
     frame = frame,
@@ -185,6 +188,8 @@ function obj:_scanElement(element, targets, seen, depth, screenFrames, screenAre
     actionNames = actionNames,
     hasMeaningfulText = hasMeaningful,
     hasHintableChildren = hasHintableChildren,
+    selectable = (role == 'AXRow' or role == 'AXOutlineRow' or role == 'AXCell')
+      and elementFactory.safeAttribute(element, 'AXSelected') ~= nil,
     config = self.config,
     screenFrames = screenFrames,
     screenArea = screenArea,
@@ -318,13 +323,31 @@ function obj:_clickTarget(target)
 
   self:_clearOverlay()
 
-  local clickPoint = geometry.clickPoint(target, self.config)
-  log.action("mouse click point={x=%.1f,y=%.1f}", clickPoint.x, clickPoint.y)
-  hs.mouse.absolutePosition(clickPoint)
-  hs.timer.usleep(math.floor(self.config.clickDelay * 1000000))
-  hs.eventtap.leftClick(clickPoint)
-  log.action("click via mouse")
-  return true
+  local screenFrames = hs.fnutils.imap(hs.screen.allScreens(), function(screen) return screen:fullFrame() end)
+  local frame = elementFactory.visibleFrame(target.element, screenFrames)
+  local function matches(point)
+    local ok, hit = pcall(hs.axuielement.systemElementAtPosition, point)
+    return ok and elementFactory.matchesTarget(hit, target.element)
+  end
+  if frame then
+    local current = { role = target.role, frame = frame,
+      activationPoint = elementFactory.safeAttribute(target.element, 'AXActivationPoint') }
+    for _, point in ipairs(geometry.clickPoints(current, self.config)) do
+      if matches(point) then
+        hs.mouse.absolutePosition(point)
+        hs.timer.usleep(math.floor(self.config.clickDelay * 1000000))
+        -- Hover can reveal another window/control; check again before posting input.
+        if matches(point) then
+          log.action('verified mouse click point={x=%.1f,y=%.1f}', point.x, point.y)
+          hs.eventtap.leftClick(point)
+          return true
+        end
+      end
+    end
+  end
+  log.error('no verified click point for role=%s', target.role or '?')
+  hs.alert.show('OpenRow: could not verify the target. Activate again.')
+  return false
 end
 
 function obj:_handleInput(event)
