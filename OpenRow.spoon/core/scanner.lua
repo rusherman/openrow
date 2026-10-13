@@ -80,11 +80,12 @@ function M.targetKind(opts)
 end
 
 -- Pure: keep semantic controls before generic action nodes sharing their frame.
-function M.dedupeTargets(targets)
+function M.dedupeTargets(targets, checkpoint)
   local result = {}
   local priority = { role = 3, action = 2, selection = 2, fallback = 1 }
 
   for _, target in ipairs(targets) do
+    if checkpoint then checkpoint() end
     local shouldAdd = true
 
     for _, existing in ipairs(result) do
