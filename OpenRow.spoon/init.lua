@@ -348,7 +348,7 @@ function obj:_clickTarget(target)
   local frame = elementFactory.visibleFrame(target.element, screenFrames)
   local function matches(point)
     local ok, hit = pcall(hs.axuielement.systemElementAtPosition, point)
-    return ok and elementFactory.matchesTarget(hit, target.element)
+    return ok and elementFactory.matchesClickPoint(hit, target.element, point)
   end
   if frame then
     local current = { role = target.role, frame = frame,

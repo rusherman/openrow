@@ -97,6 +97,8 @@ Some Accessibility roles can report a successful `AXPress` without actually acti
 
 Before clicking, OpenRow re-reads geometry and `AXActivationPoint`, clips it to visible bounds, and tests candidate points against the actual on-screen AX element. It accepts the target itself or one of its descendants, and repeats the test after moving the mouse. If no point can be verified, it shows a message instead of clicking a different element.
 
+Some Electron applications return an empty `pointer-events-none` DOM group from AX hit testing even over a button. OpenRow also accepts this specific case for buttons when the hit and target have the same process and window, child metadata confirms the group is empty, and the point remains inside the enabled button. This exception does not apply to links, opaque groups, modal containers, populated layers or another application's window.
+
 Links try the center and size-bounded corner insets. Tune the inset for applications with shifted link geometry:
 
 ```lua

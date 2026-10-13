@@ -110,6 +110,38 @@ function M.matchesTarget(hit, target)
   return false
 end
 
+function M.matchesClickPoint(hit, target, point)
+  if M.matchesTarget(hit, target) then return true end
+  -- Electron can report an empty pointer-events-none portal instead of the
+  -- button underneath it. Do not extend this exception to links or fallback
+  -- containers: their bounding boxes can contain non-clickable space.
+  if not hit or M.safeAttribute(hit, 'AXRole') ~= 'AXGroup'
+      or M.safeAttribute(target, 'AXRole') ~= 'AXButton' then return false end
+  local transparent = false
+  local classes = M.safeAttribute(hit, 'AXDOMClassList')
+  if type(classes) == 'table' then
+    for _, class in ipairs(classes) do if class == 'pointer-events-none' then transparent = true end end
+  end
+  if not transparent or M.safeAttribute(hit, 'AXModal') == true then return false end
+  local ok, sameProcess = pcall(function()
+    local pid = hit:pid()
+    return type(pid) == 'number' and pid > 0 and pid == target:pid()
+  end)
+  if not ok or not sameProcess then return false end
+  local window = M.safeAttribute(target, 'AXWindow')
+  if not window or M.safeAttribute(hit, 'AXWindow') ~= window then return false end
+  local children = M.safeAttribute(hit, 'AXChildren')
+  if type(children) ~= 'table' or next(children) ~= nil then return false end
+  for _, attribute in ipairs({ 'AXContents', 'AXChildrenInNavigationOrder' }) do
+    local values = M.safeAttribute(hit, attribute)
+    if values ~= nil and (type(values) ~= 'table' or next(values) ~= nil) then return false end
+  end
+  local frame = M.frame(target)
+  local hitFrame = M.frame(hit)
+  return frame ~= nil and hitFrame ~= nil and M.safeAttribute(target, 'AXEnabled') ~= false
+    and geometry.pointInFrame(point, frame) == true and geometry.pointInFrame(point, hitFrame) == true
+end
+
 function M.visibleFrame(element, screenFrames)
   local frame = M.frame(element)
   if M.safeAttribute(element, 'AXEnabled') == false then return nil end
