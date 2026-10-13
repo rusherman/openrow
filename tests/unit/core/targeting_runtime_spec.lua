@@ -5,6 +5,7 @@ local function element(role, frame, children, actions)
   local e = setmetatable({ identity = {}, attributes = { AXRole = role, AXFrame = frame, AXChildren = children or {} } }, AX)
   function e:attributeValue(key) return self.attributes[key] end
   function e:actionNames() return actions or {} end
+  function e:pid() return self.attributes.pid or 1 end
   function e:parameterizedAttributeValue(key, predicate)
     self.predicate = predicate
     return self.searchResults
@@ -283,4 +284,69 @@ describe('AX target regression', function()
     end, { screens[1], { x = 1000, y = 0, w = 200, h = 800 } })
   end)
 
+end)
+
+-- Captured Codex hit: an empty full-window pointer-events-none AXGroup,
+-- while the selected sidebar AXButton is at x=60,y=487,w=272,h=30.
+describe('pointer-transparent AX hit regression', function()
+  local function scene(overrides)
+    local window = element('AXWindow', { x = 0, y = 33, w = 1000, h = 700 })
+    local button = element('AXButton', { x = 60, y = 487, w = 272, h = 30 })
+    button.attributes.AXWindow = window
+    local layer = element('AXGroup', { x = 0, y = 33, w = 1000, h = 700 })
+    layer.attributes.AXWindow = window
+    layer.attributes.AXDOMClassList = { 'pointer-events-none', 'fixed', 'inset-0' }
+    for k, v in pairs(overrides or {}) do layer.attributes[k] = v end
+    return button, layer
+  end
+  it('clicks a button when AX hits an empty pointer-transparent layer in its window', function()
+    runtime(function(app, clicks)
+      local button, layer = scene()
+      hs.axuielement.systemElementAtPosition = function() return layer end
+      assert_true(app:_clickTarget({ element = button, role = 'AXButton', frame = button.attributes.AXFrame }))
+      assert_deep_equals(clicks[1], { x = 196, y = 502 })
+    end)
+  end)
+  for name, overrides in pairs({
+    ['opaque container'] = { AXDOMClassList = { 'fixed', 'inset-0' } },
+    ['different process'] = { pid = 2 },
+    ['different window'] = { AXWindow = element('AXWindow', frame) },
+    ['misplaced hit frame'] = { AXFrame = { x = 800, y = 600, w = 20, h = 20 } },
+    ['populated overlay'] = { AXChildren = { element('AXButton', frame) } },
+    ['missing child metadata'] = { AXChildren = false },
+    ['modal container'] = { AXModal = true },
+    ['navigation-only popup'] = { AXChildrenInNavigationOrder = { element('AXButton', frame) } },
+  }) do
+    it('rejects a ' .. name, function()
+      runtime(function(app, clicks)
+        local button, layer = scene(overrides)
+        hs.axuielement.systemElementAtPosition = function() return layer end
+        assert_false(app:_clickTarget({ element = button, role = 'AXButton', frame = button.attributes.AXFrame }))
+        assert_equals(#clicks, 0)
+      end)
+    end)
+  end
+  it('rejects unverifiable process identities', function()
+    runtime(function(app, clicks)
+      local button, layer = scene()
+      function button:pid() return nil end
+      function layer:pid() return nil end
+      hs.axuielement.systemElementAtPosition = function() return layer end
+      assert_false(app:_clickTarget({ element = button, role = 'AXButton', frame = button.attributes.AXFrame }))
+      assert_equals(#clicks, 0)
+    end)
+  end)
+  it('rejects an out-of-bounds point even on an empty transparent layer', function()
+    local button, layer = scene()
+    assert_false(require('core.element_factory').matchesClickPoint(layer, button, { x = 40, y = 502 }))
+  end)
+  it('does not apply the button exception to a link bounding box', function()
+    runtime(function(app, clicks)
+      local button, layer = scene()
+      button.attributes.AXRole = 'AXLink'
+      hs.axuielement.systemElementAtPosition = function() return layer end
+      assert_false(app:_clickTarget({ element = button, role = 'AXLink', frame = button.attributes.AXFrame }))
+      assert_equals(#clicks, 0)
+    end)
+  end)
 end)

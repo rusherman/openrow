@@ -29,7 +29,13 @@ Run before tagging a release. Each row: PASS / FAIL / N/A + one-line note.
 - A partially clipped control gets a point inside its visible portion.
 - Scroll content outside the viewport is omitted.
 - Move/cover a labelled control before selecting it: it is revalidated; no unrelated click occurs.
+- In Codex, a sidebar button remains clickable when AX hit testing returns its empty pointer-events-none portal. An opaque or populated popup layer still fails verification.
 - Repeated activations do not accumulate duplicate AX wrappers or consume the target limit.
+- During a large scan, `Esc` and a second activation cancel promptly; no late labels appear.
+- Switching apps while scanning cancels the old scan and does not draw labels for the previous app.
+- Search typing remains responsive and does not re-query AX metadata.
+- Labels on monitors with negative origins remain aligned; each screen has one shared canvas.
+- A scan timeout or rendering error releases the keyboard hook; normal typing still works.
 
 For a disposable local fixture:
 

@@ -47,6 +47,7 @@ hs.loadSpoon("OpenRow"):bindHotkeys({
 - Scans the frontmost app's focused window tree, with visible-row/navigation collections and a bounded visible-control search for browser content.
 - Some apps expose poor or incomplete Accessibility metadata.
 - Browser/Electron pages with huge Accessibility trees may scan slowly.
+- Scans run in cancellable time slices; `Esc` also cancels while labels are being collected. Other input is ignored until labels are ready.
 - Overlay layout is intentionally simple.
 - No scroll mode yet.
 
@@ -62,6 +63,20 @@ OpenRow marks an element as targetable when it matches one of these signals:
 - Fallback containers and meaningful static text only when they do not already contain a targetable child.
 
 Geometry uses `AXFrame` when available, otherwise `AXPosition` plus `AXSize`. Empty structural containers do not prevent scanning their children. Window, web-area and scroll-area bounds clip targets to their visible region.
+
+Each screen uses one canvas for both dimming and labels. Search text is collected during scanning, so typing a query does not issue new AX requests.
+
+Scanning yields after an 8 ms work slice and stops after 3 seconds or 6,000 visited nodes. Reaching the node limit displays a warning; a timed-out scan is cancelled. Individual AX requests use a 50 ms timeout. A coroutine cannot interrupt a native AX call that is already running, so these limits are cooperative rather than a hard real-time guarantee. Slow applications may need larger budgets:
+
+```lua
+local openrow = hs.loadSpoon("OpenRow")
+openrow.config.scanTimeout = 5
+openrow.config.maxScanNodes = 10000
+openrow.config.axTimeout = 0.1
+openrow:bindHotkeys()
+```
+
+Enable `openrow.config.debug.scan = true` before `openrow:init()` to log visited nodes, target counts, elapsed scan time and the longest work slice. Switching apps or cancelling a scan releases its pending timer and keyboard hook.
 
 If an app still misses list items, inspect which actions, roles, and child attributes that app exposes through Accessibility.
 
@@ -81,6 +96,8 @@ Then open the Hammerspoon Console and retry the failing target. The log prints t
 Some Accessibility roles can report a successful `AXPress` without actually activating the visual item. OpenRow avoids that false-positive path and clicks the selected target with the mouse.
 
 Before clicking, OpenRow re-reads geometry and `AXActivationPoint`, clips it to visible bounds, and tests candidate points against the actual on-screen AX element. It accepts the target itself or one of its descendants, and repeats the test after moving the mouse. If no point can be verified, it shows a message instead of clicking a different element.
+
+Some Electron applications return an empty `pointer-events-none` DOM group from AX hit testing even over a button. OpenRow also accepts this specific case for buttons when the hit and target have the same process and window, child metadata confirms the group is empty, and the point remains inside the enabled button. This exception does not apply to links, opaque groups, modal containers, populated layers or another application's window.
 
 Links try the center and size-bounded corner insets. Tune the inset for applications with shifted link geometry:
 
