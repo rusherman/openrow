@@ -44,7 +44,7 @@ hs.loadSpoon("OpenRow"):bindHotkeys({
 
 ## Current Limitations
 
-- Scans the frontmost app's focused window tree, including common visible/navigation child collections.
+- Scans the frontmost app's focused window tree, with visible-row/navigation collections and a bounded visible-control search for browser content.
 - Some apps expose poor or incomplete Accessibility metadata.
 - Browser/Electron pages with huge Accessibility trees may scan slowly.
 - Overlay layout is intentionally simple.
@@ -58,7 +58,10 @@ OpenRow marks an element as targetable when it matches one of these signals:
 
 - Known control roles such as buttons, links, text fields, menu items, sliders, and pop-up buttons.
 - Accessibility actions after ignoring decorative actions such as `AXShowMenu` and `AXScrollToVisible`.
-- Fallback list-like containers such as `AXRow`, `AXOutlineRow`, `AXCell`, `AXGroup`, and meaningful `AXStaticText` only when they do not already contain a targetable child.
+- Rows/cells that expose an independent action or selection state, even when they contain another control.
+- Fallback containers and meaningful static text only when they do not already contain a targetable child.
+
+Geometry uses `AXFrame` when available, otherwise `AXPosition` plus `AXSize`. Empty structural containers do not prevent scanning their children. Window, web-area and scroll-area bounds clip targets to their visible region.
 
 If an app still misses list items, inspect which actions, roles, and child attributes that app exposes through Accessibility.
 
@@ -73,11 +76,13 @@ openrow:init()
 openrow:bindHotkeys()
 ```
 
-Then open the Hammerspoon Console and retry the failing target. The log prints the selected label, role, target kind, frame, and mouse click point.
+Then open the Hammerspoon Console and retry the failing target. The log prints the selected label, role, target kind, scanned frame, and verified mouse click point. An unverified target produces an error message.
 
 Some Accessibility roles can report a successful `AXPress` without actually activating the visual item. OpenRow avoids that false-positive path and clicks the selected target with the mouse.
 
-OpenRow clicks the center of each target frame, except links, which use a small lower-left inset. Tune the link inset if a specific app exposes shifted link frames:
+Before clicking, OpenRow re-reads geometry and `AXActivationPoint`, clips it to visible bounds, and tests candidate points against the actual on-screen AX element. It accepts the target itself or one of its descendants, and repeats the test after moving the mouse. If no point can be verified, it shows a message instead of clicking a different element.
+
+Links try the center and size-bounded corner insets. Tune the inset for applications with shifted link geometry:
 
 ```lua
 local openrow = hs.loadSpoon("OpenRow")

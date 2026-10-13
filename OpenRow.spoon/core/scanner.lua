@@ -5,6 +5,11 @@ local geometry = require("core.geometry")
 
 local M = {}
 
+local function text(value)
+  if value == nil then return "" end
+  return tostring(value)
+end
+
 function M.maxScreenArea(screenFrames)
   local maxArea = 0
   for _, screenFrame in ipairs(screenFrames or {}) do
@@ -29,22 +34,22 @@ function M.hasActionableAction(actionNames, ignoredActions)
 end
 
 function M.hasMeaningfulText(parts)
-  local text = (parts.title or "") .. (parts.value or "") .. (parts.description or "")
+  local text = text(parts.title) .. text(parts.value) .. text(parts.description)
   return text:match("%S") ~= nil
 end
 
 function M.computeSearchText(parts)
   local pieces = {
-    parts.role or "",
-    parts.title or "",
-    parts.description or "",
-    parts.value or "",
-    parts.help or "",
+    text(parts.role),
+    text(parts.title),
+    text(parts.description),
+    text(parts.value),
+    text(parts.help),
   }
   return table.concat(pieces, " "):lower()
 end
 
--- Pure: classify a candidate element. Returns "role" / "action" / "fallback" / nil.
+-- Pure: classify a candidate element. Returns "role" / "action" / "selection" / "fallback" / nil.
 -- opts must include role, frame, enabled, actionNames, hasMeaningfulText,
 -- hasHintableChildren, config, screenFrames, screenArea.
 function M.targetKind(opts)
@@ -59,10 +64,10 @@ function M.targetKind(opts)
   local areaRatio = (frame.w * frame.h) / opts.screenArea
   if areaRatio > config.maxTargetAreaRatio then return nil end
 
-  if config.roleFallbacks[role] and opts.hasHintableChildren then return nil end
-
   if config.controlRoles[role] then return "role" end
   if M.hasActionableAction(opts.actionNames, config.ignoredActions) then return "action" end
+  if opts.selectable then return "selection" end
+  if config.roleFallbacks[role] and opts.hasHintableChildren then return nil end
 
   if config.roleFallbacks[role]
       and frame.w >= config.minListItemWidth
@@ -74,16 +79,17 @@ function M.targetKind(opts)
   return nil
 end
 
--- Pure: drop near-duplicate frames; prefer non-fallback over fallback when overlapping.
+-- Pure: keep semantic controls before generic action nodes sharing their frame.
 function M.dedupeTargets(targets)
   local result = {}
+  local priority = { role = 3, action = 2, selection = 2, fallback = 1 }
 
   for _, target in ipairs(targets) do
     local shouldAdd = true
 
     for _, existing in ipairs(result) do
       if geometry.framesAlmostEqual(existing.frame, target.frame) then
-        if not (existing.kind == "fallback" and target.kind ~= "fallback") then
+        if (priority[existing.kind] or 0) >= (priority[target.kind] or 0) then
           shouldAdd = false
         end
         break
@@ -101,8 +107,9 @@ function M.dedupeTargets(targets)
         local sameFrame = geometry.framesAlmostEqual(existing.frame, target.frame)
         local existingContainsTarget = geometry.contains(existing.frame, target.frame)
 
-        if existing.kind == "fallback" and target.kind ~= "fallback"
-            and (sameFrame or existingContainsTarget) then
+        if (sameFrame and (priority[existing.kind] or 0) < (priority[target.kind] or 0))
+            or (existing.kind == "fallback" and target.kind ~= "fallback"
+              and (existingContainsTarget or geometry.contains(target.frame, existing.frame))) then
           table.remove(result, index)
         end
       end
